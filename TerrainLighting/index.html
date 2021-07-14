@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>地形渲染</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+    <!--<link href="mapbox-gl.css" rel="stylesheet">
+    <script src="mapbox-gl.js"></script>-->
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.3.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.3.0/mapbox-gl.js"></script>
+    <!--<link href="https://api.mapbox.com/mapbox-gl-js/v1.13.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v1.13.0/mapbox-gl.js"></script>-->
+    <link href="jquery.tiltShift.css" rel="stylesheet">
+    <script src="jquery.min.js"></script>
+    <script src="jquery.tiltShift.js"></script>
+    <script>
+
+        jQuery(document).ready(function () {
+
+            $('.tiltshift').tiltShift();
+
+        });
+
+    </script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 100%;
+            z-index: 0;
+        }
+
+        .panel {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 20%;
+            height: 20%;
+            background-color: white;
+        }
+
+        #panel {
+            z-index: 10;
+            width: auto;
+            height: auto
+        }
+
+        #screen-shot {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 100%;
+            z-index: -1;
+        }
+
+        #screenshot-panel {
+            z-index: -1;
+            width: auto;
+            height: auto
+        }
+
+        .mapboxgl-control-container {
+            display: none;
+        }
+
+        .mapboxgl-popup {
+            max-width: 200px;
+        }
+
+        #progress-bar {
+            width: 270px;
+            height: 20px;
+            border: 1px solid black;
+        }
+
+        #bar {
+            width: 0%;
+            height: 100%;
+            background-color: green;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map">
+        <div id="panel" class="panel">
+            <button onclick="window.startRender()">渲染</button>
+            <button onclick="window.removeRender()">移除渲染图层</button>
+            <button onclick="window.screenShot()">拍照模式</button>
+            <button onclick="window.showTileParams()">显示瓦片参数</button>
+            <div style="display: flex;flex-direction: column;">
+                <label style="margin-bottom: 10px; margin-top: 10px;">
+                    太阳位置: <input type="text" name="sun_position" value="[0, -1, 0.2]" />
+                </label>
+                <label style="margin-bottom: 10px;">
+                    软阴影系数: <input type="text" name="soft" value="1.5" />
+                </label>
+                <label style="margin-bottom: 10px;">
+                    环境光系数: <input type="text" name="ambient" value="0.25" />
+                </label>
+                <label style="margin-bottom: 10px;">
+                    高度系数: <input type="text" name="elevationScale" value="1.0" />
+                </label>
+                <label style="margin-bottom: 10px;">
+                    预期瓦片数量: <input type="text" name="tile_num" value="12" />
+                </label>
+                <label style="margin-bottom: 10px;">
+                    强制指定缩放: <input type="text" name="zoom" value="-1" />
+                </label>
+                <label style="margin-bottom: 10px;">
+                    （-1代表不指定，使用与预期瓦片数量最接近的一个缩放等级）
+                </label>
+                <label style="margin-bottom: 10px;">
+                    地形采样系数 <input type="text" name="segment_factor" value="0.5" />
+                </label>
+            </div>
+            <div id="progress-bar">
+                <div id="bar"></div>
+            </div>
+        </div>
+        <div id="screenshot-panel" class="panel">
+            <div>
+                <button onclick="window.saveScreenShot()">保存图片</button>
+                <button onclick="window.refreshScreenShot()">刷新图片</button>
+                <button onclick="window.quitScreenShot()">关闭拍照模式</button>
+                <button onclick="window.paramsExplaination()" style="margin-right: 10px;">参数解释</button>
+            </div>
+            <div style="display: flex;flex-direction: column;">
+                <label style="margin-bottom: 10px; margin-top: 10px;">
+                    position: <input type="text" name="position" value="55" />
+                </label>
+                <label style="margin-bottom: 10px;">
+                    blur: <input type="text" name="blur" value="2" />
+                </label>
+                <label style="margin-bottom: 10px;">
+                    focus: <input type="text" name="focus" value="15" />
+                </label>
+                <label style="margin-bottom: 10px;">
+                    falloff: <input type="text" name="falloff" value="10" />
+                </label>
+                <label style="margin-bottom: 10px;">
+                    direction: <input type="text" name="direction" value="90" />
+                </label>
+            </div>
+        </div>
+        <div id="screen-shot">
+        </div>
+    </div>
+    <script>
+    </script>
+    <script type="module">
+        import {
+            init,
+            createProgram,
+        } from "./render.js";
+        import {
+            loadImage,
+            lat2tile,
+            long2tile,
+            tile2long,
+            PingPong,
+            getRegion,
+            tile2lat,
+            degrees,
+            radians,
+            genTerrain,
+            getRegion_Whole,
+            getRegion_Tiles
+        } from "./utils.js"
+
+        var tolerance = 1;
+        var pre_lnglat = null;
+        var active_border_index = 0;
+
+        var lower_left = [-112.2436646988073, 35.97498202890266]
+        var upper_left = [-112.2436646988073, 36.210995444055555]
+        var upper_right = [-111.8532713865924, 36.210995444055555]
+        var lower_right = [-111.8532713865924, 35.97498202890266]
+
+
+        var best_tile_num = 24
+
+        var border_line = {
+            type: "FeatureCollection",
+            features: [
+                {
+                    type: "Feature",
+                    properties: {
+                        id: 0,
+                    },
+                    geometry: {
+                        type: "LineString",
+                        coordinates: [
+                            [...lower_left],
+                            [...upper_left],
+                        ],
+                    },
+                },
+                {
+                    type: "Feature",
+                    properties: {
+                        id: 1,
+                    },
+                    geometry: {
+                        type: "LineString",
+                        coordinates: [
+                            [...upper_left],
+                            [...upper_right],
+                        ],
+                    },
+                },
+                {
+                    type: "Feature",
+                    properties: {
+                        id: 2,
+                    },
+                    geometry: {
+                        type: "LineString",
+                        coordinates: [
+                            [...upper_right],
+                            [...lower_right],
+                        ],
+                    },
+                },
+                {
+                    type: "Feature",
+                    properties: {
+                        id: 3,
+                    },
+                    geometry: {
+                        type: "LineString",
+                        coordinates: [
+                            [...lower_right],
+                            [...lower_left],
+                        ],
+                    },
+                },
+            ],
+        };
+
+        //mapboxgl.accessToken = false//'pk.eyJ1Ijoic3RlZWx3YWxsMjAxNCIsImEiOiJja20wODdoZXQxNTY5Mm5zMmoyd3p2OHN1In0.WZyYGw7OcSE76xyqmHQ0pA';
+
+        var image_download_count = 0
+
+
+        mapboxgl.accessToken = 'pk.eyJ1Ijoic3RlZWx3YWxsMjAxNCIsImEiOiJja20wODdoZXQxNTY5Mm5zMmoyd3p2OHN1In0.WZyYGw7OcSE76xyqmHQ0pA';
+
+        var map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/streets-v11',
+            //style: emptyStyle,
+            zoom: 10,
+            center: [(lower_left[0] + upper_right[0]) / 2, (lower_left[1] + upper_right[1]) / 2],
+            pitch: 0,
+            bearing: 0,
+            antialias: true,
+            preserveDrawingBuffer: true
+        });
+        window.map = map;
+        /*
+                1
+            --------→
+            ↑       |
+         0  |       |  2
+            |       ↓
+            ←--------
+                3
+        */
+        function onmove_line(e) {
+            var coords = e.lngLat;
+            var dx = coords.lng - pre_lnglat.lng;
+            var dy = coords.lat - pre_lnglat.lat;
+            //console.log(dx, dy)
+            if (active_border_index % 2 == 0) {
+                border_line.features[active_border_index].geometry.coordinates[0][0] += dx;
+                border_line.features[active_border_index].geometry.coordinates[1][0] += dx;
+                border_line.features[(active_border_index + 1) % 4].geometry.coordinates[0][0] += dx;
+                border_line.features[(active_border_index - 1 + 4) % 4].geometry.coordinates[1][0] += dx;
+            }
+            else {
+                border_line.features[active_border_index].geometry.coordinates[0][1] += dy;
+                border_line.features[active_border_index].geometry.coordinates[1][1] += dy;
+                border_line.features[(active_border_index + 1) % 4].geometry.coordinates[0][1] += dy;
+                border_line.features[(active_border_index - 1 + 4) % 4].geometry.coordinates[1][1] += dy;
+            }
+            map.getSource("border-line").setData(border_line);
+            pre_lnglat = e.lngLat;
+        }
+        function onup_line(e) {
+            map.off("mousemove", onmove_line);
+        }
+
+        const terrainRenderLayer = {
+            id: 'terrain_render',
+            type: 'custom',
+            renderingMode: '3d',
+            onAdd: function (map, gl) {
+                gl.getExtension('OES_texture_float');
+                gl.getExtension('OES_texture_float_linear')
+                gl.getExtension("OES_element_index_uint");
+                var { final_fbo, vertices, uvs, indices } = init(gl,
+                    window.terrain_img, window.satellite_img,
+                    window.tlong0, window.tlong1, window.tlat0, window.tlat1, window.best_zoom,
+                    $("input[name='sun_position']").val(), $("input[name='soft']").val(), $("input[name='ambient']").val(), $("input[name='elevationScale']").val(), $("input[name='segment_factor']").val())
+                //console.log("init complete", final_fbo.length)
+                this.final_fbo = final_fbo;
+
+                this.ll = indices.length;
+                this.verticesBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.verticesBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+                this.uvsBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.uvsBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(uvs), gl.STATIC_DRAW);
+
+
+                this.indicesBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indicesBuffer);
+                gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(indices), gl.STATIC_DRAW)
+
+
+                gl.enable(gl.DEPTH_TEST);
+                var renderscreen_vert_source = `
+                    precision highp float;
+                    
+                    attribute vec3 position;
+                    attribute vec2 uvs;
+                    
+                    //uniform mat4 projection, view;
+                    uniform mat4 matrix;
+                    uniform sampler2D tElevation;
+                    
+                    varying vec2 uv;
+                    
+                    void main() {
+                    gl_Position = matrix * vec4(position, 1.0);
+                    
+                    uv = uvs;
+                    }
+                    `
+                var renderscreen_frag_source = `
+                    precision highp float;
+                    uniform sampler2D tFinal;
+                    //uniform sampler2D tElevation;
+                    uniform mat4 projection;
+                    uniform vec2 resolution;
+                    
+                    varying vec2 uv;
+                    
+                    void main() {
+                    //gl_FragColor = projection * vec4(0.5, 0.5, -0.1, 1);
+                    //gl_FragColor = vec4(texture2D(tFinal, uv).rgb * 0.0005, 1);
+                    //vec2 uv = gl_FragCoord.xy / resolution;
+                    
+                    gl_FragColor = texture2D(tFinal, uv);
+                    //gl_FragColor = vec4(texture2D(tElevation, uv).xyz * 0.0001, 1);
+                    }    
+                    `
+                this.renderscreen_program = createProgram(gl, [renderscreen_vert_source, renderscreen_frag_source])
+
+
+
+                this.tFinal_loc = gl.getUniformLocation(this.renderscreen_program, 'tFinal');
+                this.matrix_loc = gl.getUniformLocation(this.renderscreen_program, "matrix");
+                //this.resolution_loc = gl.getUniformLocation(this.renderscreen_program, 'resolution');
+
+
+                this.position_loc = gl.getAttribLocation(this.renderscreen_program, "position");
+                this.uvs_loc = gl.getAttribLocation(this.renderscreen_program, "uvs");
+                this.texture = final_fbo.texture
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, null)
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null)
+                console.log("added")
+            },
+            render: function (gl, matrix) {
+                gl.useProgram(this.renderscreen_program)
+
+                //gl.uniform2fv(this.resolution_loc, [window.img_width, window.img_height])
+
+                gl.activeTexture(gl.TEXTURE7)
+                gl.bindTexture(gl.TEXTURE_2D, this.texture);
+                gl.uniform1i(this.tFinal_loc, 7);
+
+                gl.enableVertexAttribArray(this.position_loc);
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.verticesBuffer)
+                gl.vertexAttribPointer(this.position_loc, 3, gl.FLOAT, false, 0, 0);
+
+                gl.enableVertexAttribArray(this.uvs_loc);
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.uvsBuffer)
+                gl.vertexAttribPointer(this.uvs_loc, 2, gl.FLOAT, false, 0, 0);
+
+
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indicesBuffer)
+
+                gl.uniformMatrix4fv(this.matrix_loc, false, matrix)
+
+
+                //var temp = initFramebuffer(gl, 31);
+                //gl.bindFramebuffer(gl.FRAMEBUFFER, temp);
+
+                gl.drawElements(gl.TRIANGLES, this.ll, gl.UNSIGNED_INT, 0);
+                //console.log("rendered")
+                //var pixels = new Float32Array(768 * 768 * 4);
+
+                //gl.readPixels(0, 0, 768, 768, gl.RGBA, gl.FLOAT, pixels);*/
+            },
+            onRemove(map, gl) {
+                gl.deleteTexture(this.final_fbo.texture)
+                gl.deleteFramebuffer(this.final_fbo)
+
+                gl.deleteBuffer(this.verticesBuffer)
+                gl.deleteBuffer(this.uvsBuffer)
+                gl.deleteBuffer(this.indicesBuffer)
+                console.log("resources removed")
+            }
+        };
+        map.on('load', async function () {
+            map.on("mousemove", function (e) {
+                // Prevent the default map drag behavior.
+                var features = map.queryRenderedFeatures(
+                    [
+                        [e.point.x - tolerance, e.point.y - tolerance],
+                        [e.point.x + tolerance, e.point.y + tolerance],
+                    ],
+                    {
+                        layers: ["border"],
+                    }
+                );
+                if (features.length != 0) {
+                    map.getCanvas().style.cursor = "move"
+                }
+                else {
+                    map.getCanvas().style.cursor = ""
+                }
+            });
+            map.on("mousedown", function (e) {
+                // Prevent the default map drag behavior.
+                var features = map.queryRenderedFeatures(
+                    [
+                        [e.point.x - tolerance, e.point.y - tolerance],
+                        [e.point.x + tolerance, e.point.y + tolerance],
+                    ],
+                    {
+                        layers: ["border"],
+                    }
+                );
+                if (features.length != 0) {
+                    active_border_index = features[0].properties.id
+                    e.preventDefault();
+                    pre_lnglat = e.lngLat;
+                    map.on("mousemove", onmove_line);
+                    map.once("mouseup", onup_line);
+                }
+            });
+            map.addSource("border-line", {
+                type: "geojson",
+                data: border_line
+            })
+            map.addLayer({
+                id: "border",
+                type: "line",
+                source: "border-line"
+            })
+        });
+        async function startRender() {
+            image_download_count = 0;
+            best_tile_num = eval($("input[name='tile_num']").val())
+            var lng0 = border_line.features[0].geometry.coordinates[0][0];
+            var lat0 = border_line.features[0].geometry.coordinates[0][1];
+            var lng1 = border_line.features[2].geometry.coordinates[0][0];
+            var lat1 = border_line.features[2].geometry.coordinates[0][1];
+
+            if (lng0 > lng1) [lng1, lng0] = [lng0, lng1];
+            if (lat0 > lat1) [lat1, lat0] = [lat0, lat1];
+
+            var manuel_zoom = $("input[name='zoom']").val()
+            if (manuel_zoom != "" && manuel_zoom != "-1") {
+                window.best_zoom = eval(manuel_zoom)
+                window.tlong0 = long2tile(lng0, window.best_zoom)
+                window.tlong1 = long2tile(lng1, window.best_zoom)
+                window.tlat0 = lat2tile(lat0, window.best_zoom)
+                window.tlat1 = lat2tile(lat1, window.best_zoom)
+            }
+            else {
+                var closest = 0x7fffffff;
+                for (let zoom = 1; zoom <= 18; zoom++) {
+                    var temp_tlong0 = long2tile(lng0, zoom)
+                    var temp_tlong1 = long2tile(lng1, zoom)
+                    var temp_tlat0 = lat2tile(lat0, zoom)
+                    var temp_tlat1 = lat2tile(lat1, zoom)
+                    var count = (Math.abs(temp_tlong0 - temp_tlong1) + 1) * (Math.abs(temp_tlat0 - temp_tlat1) + 1)
+                    if (Math.abs(best_tile_num - count) < closest) {
+                        closest = Math.abs(best_tile_num - count)
+                        window.best_zoom = zoom
+                        window.tlong0 = temp_tlong0;
+                        window.tlong1 = temp_tlong1;
+                        window.tlat0 = temp_tlat0;
+                        window.tlat1 = temp_tlat1;
+                    }
+                }
+            }
+
+            var terrain_canvas = await getRegion_Tiles(
+                window.tlong0,
+                window.tlat0,
+                window.tlong1,
+                window.tlat1,
+                window.best_zoom,
+                "https://api.mapbox.com/v4/mapbox.terrain-rgb/zoom/tLong/tLat.pngraw?access_token=pk.eyJ1Ijoic3RlZWx3YWxsMjAxNCIsImEiOiJja20wODdoZXQxNTY5Mm5zMmoyd3p2OHN1In0.WZyYGw7OcSE76xyqmHQ0pA"
+                //window.best_zoom + "/terrain-rgb_zoom_tLong_tLat.png"
+            );
+            var terrain_img = new Image();
+            terrain_img.src = terrain_canvas.toDataURL();
+            terrain_img.addEventListener("load", async function () {
+                var satellite_canvas = await getRegion_Tiles(
+                    window.tlong0,
+                    window.tlat0,
+                    window.tlong1,
+                    window.tlat1,
+                    window.best_zoom,
+                    "https://api.mapbox.com/v4/mapbox.satellite/zoom/tLong/tLat.pngraw?access_token=pk.eyJ1Ijoic3RlZWx3YWxsMjAxNCIsImEiOiJja20wODdoZXQxNTY5Mm5zMmoyd3p2OHN1In0.WZyYGw7OcSE76xyqmHQ0pA"
+                    //window.best_zoom + "/satellite_zoom_tLong_tLat.png"
+                );
+                var satellite_img = new Image();
+                satellite_img.src = satellite_canvas.toDataURL();
+                satellite_img.addEventListener("load", function () {
+                    window.terrain_img = terrain_img;
+                    window.satellite_img = satellite_img;
+                    removeRender()
+                    map.addLayer(terrainRenderLayer);
+                });
+            });
+        }
+        window.startRender = startRender;
+
+        function removeRender() {
+            if (map.getLayer("terrain_render"))
+                map.removeLayer("terrain_render")
+        }
+        window.removeRender = removeRender;
+
+        function screenShot() {
+            var canvas = map.getCanvas()
+            var src = canvas.toDataURL();
+
+            /*var before_div = document.createElement("div")
+            before_div.className = "tiltshift-before tiltshift-layer"
+            before_div.style.backgroundImage = "url(" + src + ")"*/
+
+
+            var photo = new Image();
+            photo.src = src//"example1.jpg"//canvas.toDataURL();
+            photo.id = "ScreenShot"
+
+            console.log(canvas.width, canvas.height, canvas, canvas.style.width, canvas.style.height)
+            //photo.style.transform = "scale(0.8) translate(-12.5%, -12.5%)"
+            photo.className = "tiltshift"
+            photo.dataset.position = $("input[name='position']").val();
+            photo.dataset.blur = $("input[name='blur']").val();
+            photo.dataset.focus = $("input[name='focus']").val();
+            photo.dataset.falloff = $("input[name='falloff']").val();
+            photo.dataset.direction = $("input[name='direction']").val();
+            photo.style.width = canvas.style.width
+            photo.style.height = canvas.style.height
+            //window.photo = photo
+            var screen_shot = document.getElementById("screen-shot")
+            var screenshot_panel = document.getElementById("screenshot-panel")
+            screen_shot.style.zIndex = 20;
+            screenshot_panel.style.zIndex = 21;
+            screen_shot.appendChild(photo)
+            $('.tiltshift').tiltShift();
+        }
+        window.screenShot = screenShot
+
+        function saveScreenShot() {
+            var download_link = document.createElement("a")
+            var event = new MouseEvent('click')
+            //console.log(document.getElementById("ScreenShot").src)
+            download_link.download = "screenshot"
+            download_link.href = document.getElementById("ScreenShot").src
+            download_link.dispatchEvent(event)
+        }
+        window.saveScreenShot = saveScreenShot
+
+        function quitScreenShot() {
+            var screen_shot = document.getElementById("screen-shot")
+            //console.log(screen_shot.childNodes)
+            for (let i = 0; i < screen_shot.childNodes.length; i++) {
+                var child_img = screen_shot.childNodes[i]
+                if (child_img.className == "tiltshift-wrap")
+                    screen_shot.removeChild(child_img)
+            }
+            var screenshot_panel = document.getElementById("screenshot-panel")
+            screen_shot.style.zIndex = -1;
+            screenshot_panel.style.zIndex = -1;
+        }
+        window.quitScreenShot = quitScreenShot
+
+        function refreshScreenShot() {
+            var screen_shot = document.getElementById("screen-shot")
+            for (let i = 0; i < screen_shot.childNodes.length; i++) {
+                var child_img = screen_shot.childNodes[i]
+                if (child_img.className == "tiltshift-wrap")
+                    screen_shot.removeChild(child_img)
+            }
+
+            var canvas = map.getCanvas()
+            var src = canvas.toDataURL();
+            var photo = new Image();
+            photo.src = src
+            photo.id = "ScreenShot"
+            photo.className = "tiltshift"
+            photo.dataset.position = $("input[name='position']").val();
+            photo.dataset.blur = $("input[name='blur']").val();
+            photo.dataset.focus = $("input[name='focus']").val();
+            photo.dataset.falloff = $("input[name='falloff']").val();
+            photo.dataset.direction = $("input[name='direction']").val();
+            photo.style.width = canvas.style.width
+            photo.style.height = canvas.style.height
+            screen_shot.appendChild(photo)
+            $('.tiltshift').tiltShift();
+        }
+        window.refreshScreenShot = refreshScreenShot
+
+        function showTileParams() {
+            var tLong0, tLat0, tLong1, tLat1, zoom
+            var lng0 = border_line.features[0].geometry.coordinates[0][0];
+            var lat0 = border_line.features[0].geometry.coordinates[0][1];
+            var lng1 = border_line.features[2].geometry.coordinates[0][0];
+            var lat1 = border_line.features[2].geometry.coordinates[0][1];
+
+            if (lng0 > lng1) [lng1, lng0] = [lng0, lng1];
+            if (lat0 > lat1) [lat1, lat0] = [lat0, lat1];
+
+            var manuel_zoom = $("input[name='zoom']").val()
+            if (manuel_zoom != "" && manuel_zoom != "-1") {
+                zoom = eval(manuel_zoom)
+                tLong0 = long2tile(lng0, zoom)
+                tLong1 = long2tile(lng1, zoom)
+                tLat0 = lat2tile(lat0, zoom)
+                tLat1 = lat2tile(lat1, zoom)
+            }
+            else {
+                var closest = 0x7fffffff;
+                for (let _zoom = 1; _zoom <= 18; _zoom++) {
+                    var temp_tlong0 = long2tile(lng0, _zoom)
+                    var temp_tlong1 = long2tile(lng1, _zoom)
+                    var temp_tlat0 = lat2tile(lat0, _zoom)
+                    var temp_tlat1 = lat2tile(lat1, _zoom)
+                    var count = (Math.abs(temp_tlong0 - temp_tlong1) + 1) * (Math.abs(temp_tlat0 - temp_tlat1) + 1)
+                    if (Math.abs(best_tile_num - count) < closest) {
+                        closest = Math.abs(best_tile_num - count)
+                        zoom = _zoom
+                        tLong0 = temp_tlong0;
+                        tLong1 = temp_tlong1;
+                        tLat0 = temp_tlat0;
+                        tLat1 = temp_tlat1;
+                    }
+                }
+            }
+            if (tLat0 < tLat1) {
+                [tLat0, tLat1] = [tLat1, tLat0]
+            }
+            if (tLong0 > tLong1) {
+                [tLong0, tLong1] = [tLong1, tLong0]
+            }
+            alert(
+                "lng0:" + lng0 + " lng1:" + lng1 +
+                " lat0:" + lat0 + " lat1:" + lat1 +
+                " tLong0:" + tLong0 + " tLong1:" + tLong1 +
+                " tLat1:" + tLat1 + " tLat1:" + tLat0 +
+                " zoom:" + zoom +
+                " tile number:" + (tLong1 - tLong0 + 1) * (tLat0 - tLat1 + 1))
+        }
+        window.showTileParams = showTileParams
+
+        function paramsExplaination() {
+            alert(`-position (0-100), defines the point of focus. 66 would be two thirds of the way in.
+-blur (0-?), the blur radius in pixels. 1 or 2 are usually good numbers.
+-focus (0-100), the amount of area that is in focus. 10 would mean one tenth of the image is sharp.
+-falloff (0-100), the amount of area between complete focus and complete blur. The lower the value, the “tighter” the fade.
+-direction (“x”, “y”, or 0-360), the direction of the effect with zero at right.`)
+        }
+        window.paramsExplaination = paramsExplaination
+
+        function counter() {
+            image_download_count++;
+            var percent = image_download_count / ((window.tlong1 - window.tlong0 + 1) * (window.tlat0 - window.tlat1 + 1)) / 2 * 100
+            var elem = document.getElementById("bar")
+            elem.style.width = percent + "%"
+        }
+        window.counter = counter
+    </script>
+
+</body>
+
+</html>
